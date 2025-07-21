@@ -137,7 +137,7 @@ func main() {
 // Conectar a MongoDB
 func connectDB() error {
 	// Reemplaza <db_password> con tu contraseña real
-	uri := "mongodb+srv://admin:edier2004$2004@compiladoresr.6oxafwv.mongodb.net/?retryWrites=true&w=majority&appName=compiladoresR"
+	uri := "mongodb+srv://admin:edier20042004@compiladoresr.6oxafwv.mongodb.net/?retryWrites=true&w=majority&appName=compiladoresR"
 	
 	clientOptions := options.Client().ApplyURI(uri)
 	var err error
