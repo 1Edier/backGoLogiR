@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -134,27 +135,77 @@ func main() {
 	log.Fatal(e.Start(":" + port))
 }
 
-// Conectar a MongoDB
+// Conectar a MongoDB con configuración mejorada
 func connectDB() error {
-	// Reemplaza <db_password> con tu contraseña real
+	// URI de MongoDB Atlas
 	uri := "mongodb+srv://admin:edier20042004@compiladoresr.6oxafwv.mongodb.net/?retryWrites=true&w=majority&appName=compiladoresR"
 	
+	// Configurar opciones de cliente con configuraciones TLS mejoradas
 	clientOptions := options.Client().ApplyURI(uri)
+	
+	// Configuración TLS explícita
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: false, // Cambiar a true solo para pruebas
+	}
+	clientOptions.SetTLSConfig(tlsConfig)
+	
+	// Configuraciones adicionales para conexión estable
+	clientOptions.SetMaxPoolSize(10)
+	clientOptions.SetMinPoolSize(1)
+	clientOptions.SetMaxConnIdleTime(30 * time.Second)
+	clientOptions.SetServerSelectionTimeout(10 * time.Second)
+	clientOptions.SetConnectTimeout(10 * time.Second)
+	
 	var err error
-	client, err = mongo.Connect(context.TODO(), clientOptions)
+	
+	// Crear contexto con timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	
+	log.Println("Intentando conectar a MongoDB Atlas...")
+	
+	client, err = mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		return err
+		return fmt.Errorf("error al conectar: %v", err)
 	}
 
-	// Verificar conexión
-	err = client.Ping(context.TODO(), nil)
+	// Verificar conexión con timeout
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	
+	err = client.Ping(pingCtx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("error en ping: %v", err)
 	}
 
 	db = client.Database("auth_system")
-	log.Println("Conectado exitosamente a MongoDB")
+	log.Println("Conectado exitosamente a MongoDB Atlas")
+	
+	// Crear índices si no existen
+	createIndexes()
+	
 	return nil
+}
+
+// Crear índices para optimizar consultas
+func createIndexes() {
+	collection := db.Collection("users")
+	
+	// Índice único para email
+	indexModel := mongo.IndexModel{
+		Keys:    bson.M{"email": 1},
+		Options: options.Index().SetUnique(true),
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	_, err := collection.Indexes().CreateOne(ctx, indexModel)
+	if err != nil {
+		log.Printf("Advertencia: No se pudo crear índice de email: %v", err)
+	} else {
+		log.Println("Índice de email creado exitosamente")
+	}
 }
 
 // Generar código de verificación
@@ -215,8 +266,11 @@ func registerHandler(c echo.Context) error {
 
 	// Verificar si el usuario ya existe
 	collection := db.Collection("users")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	var existingUser User
-	err := collection.FindOne(context.TODO(), bson.M{"email": req.Email}).Decode(&existingUser)
+	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&existingUser)
 	if err == nil {
 		return c.JSON(http.StatusConflict, Response{
 			Success: false,
@@ -240,7 +294,10 @@ func registerHandler(c echo.Context) error {
 		CreatedAt:        time.Now(),
 	}
 
-	result, err := collection.InsertOne(context.TODO(), newUser)
+	insertCtx, insertCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer insertCancel()
+	
+	result, err := collection.InsertOne(insertCtx, newUser)
 	if err != nil {
 		log.Printf("Error insertando usuario: %v", err)
 		return c.JSON(http.StatusInternalServerError, Response{
@@ -279,8 +336,11 @@ func loginHandler(c echo.Context) error {
 
 	// Buscar usuario
 	collection := db.Collection("users")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	var user User
-	err := collection.FindOne(context.TODO(), bson.M{"email": req.Email}).Decode(&user)
+	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&user)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, Response{
 			Success: false,
@@ -310,7 +370,11 @@ func loginHandler(c echo.Context) error {
 				"code_expiry":       codeExpiry,
 			},
 		}
-		collection.UpdateOne(context.TODO(), bson.M{"_id": user.ID}, update)
+		
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer updateCancel()
+		
+		collection.UpdateOne(updateCtx, bson.M{"_id": user.ID}, update)
 
 		// Enviar código por email
 		if err := sendVerificationEmail(req.Email, verificationCode); err != nil {
@@ -357,8 +421,11 @@ func verifyCodeHandler(c echo.Context) error {
 
 	// Buscar usuario
 	collection := db.Collection("users")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	var user User
-	err := collection.FindOne(context.TODO(), bson.M{"email": req.Email}).Decode(&user)
+	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&user)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, Response{
 			Success: false,
@@ -388,7 +455,11 @@ func verifyCodeHandler(c echo.Context) error {
 			"verification_code": "",
 		},
 	}
-	_, err = collection.UpdateOne(context.TODO(), bson.M{"_id": user.ID}, update)
+	
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer updateCancel()
+	
+	_, err = collection.UpdateOne(updateCtx, bson.M{"_id": user.ID}, update)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, Response{
 			Success: false,
@@ -416,8 +487,11 @@ func resendCodeHandler(c echo.Context) error {
 
 	// Buscar usuario
 	collection := db.Collection("users")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	var user User
-	err := collection.FindOne(context.TODO(), bson.M{"email": req.Email}).Decode(&user)
+	err := collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&user)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, Response{
 			Success: false,
@@ -443,7 +517,11 @@ func resendCodeHandler(c echo.Context) error {
 			"code_expiry":       codeExpiry,
 		},
 	}
-	_, err = collection.UpdateOne(context.TODO(), bson.M{"_id": user.ID}, update)
+	
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer updateCancel()
+	
+	_, err = collection.UpdateOne(updateCtx, bson.M{"_id": user.ID}, update)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, Response{
 			Success: false,
@@ -494,8 +572,11 @@ func authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		// Verificar que el usuario existe y está verificado
 		collection := db.Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
 		var user User
-		err := collection.FindOne(context.TODO(), bson.M{
+		err := collection.FindOne(ctx, bson.M{
 			"email":       email,
 			"is_verified": true,
 		}).Decode(&user)
