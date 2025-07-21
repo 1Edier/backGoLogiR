@@ -128,7 +128,7 @@ func main() {
 	// Iniciar servidor
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "4000"
 	}
 	log.Printf("Servidor iniciado en puerto %s", port)
 	log.Fatal(e.Start(":" + port))
